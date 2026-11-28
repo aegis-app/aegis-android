@@ -1,0 +1,5 @@
+// Top-level build file (Gradle / Android Studio route; the supported
+// one-command build is the offline manual pipeline in build-apk.sh)
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

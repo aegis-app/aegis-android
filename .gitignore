@@ -1,0 +1,14 @@
+# 🔧 Build outputs
+dist/
+build/
+*.apk
+
+# 🔑 Local configuration and signing material (never commit secrets)
+local.properties
+*.keystore
+.env
+
+# 🛠️ IDE / OS noise
+.idea/
+*.iml
+.DS_Store
