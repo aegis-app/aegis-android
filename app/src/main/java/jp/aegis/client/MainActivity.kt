@@ -29,6 +29,7 @@ import jp.aegis.client.a2s.EewCountdown
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.briefing.Briefing
+import jp.aegis.client.demo.Demo
 import jp.aegis.client.news.News
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
@@ -117,6 +118,11 @@ class MainActivity : Activity() {
         stopEewTicker()
         currentTab = id
         content.removeAllViews()
+        // 🧪 テスト表示中はブリーフィング / イベントをサンプルで描く
+        if (demoMode && (id == "briefing" || id == "events")) {
+            renderDemo(id)
+            return
+        }
         when (id) {
             "events" -> renderEvents()
             "radar" -> renderRadar()
@@ -341,6 +347,54 @@ class MainActivity : Activity() {
             }
             content.addView(b)
         }
+    }
+
+    // ----------------------------------------
+    // 🧪 テスト表示 (デモ)
+    // ----------------------------------------
+
+    private var demoMode = false // テスト表示中かどうか
+    private var demoEew: jp.aegis.client.a2s.EewPayload? = null // サンプル EEW
+
+    // 🧪 テスト表示を開始する (ブリーフィングタブで開く)
+    private fun enableDemo() {
+        demoMode = true
+        demoEew = Demo.buildDemoEew(System.currentTimeMillis())
+        showTab("briefing")
+    }
+
+    // 🧪 テスト表示を終了し、実データの表示に戻す
+    private fun disableDemo() {
+        demoMode = false
+        demoEew = null
+        showTab(currentTab)
+    }
+
+    // 🧪 デモの描画: セクション + EEW カウントダウンカード + 終了ボタン。
+    // ブリーフィングでは EEW カードを天気カードの直後 (4 枚目) に差し込む
+    private fun renderDemo(tab: String) {
+        content.addView(text(Demo.STATUS_TEXT, 13f))
+        val places = Settings.places(this)
+        if (tab == "events") {
+            for (s in Demo.eventsSections(System.currentTimeMillis())) {
+                content.addView(sectionCard(s))
+            }
+            val eew = demoEew
+            if (eew != null) addEewCard(content, content.childCount, eew, places)
+        } else {
+            val sections = Demo.briefingSections()
+            for ((i, s) in sections.withIndex()) {
+                if (i == 3) {
+                    val eew = demoEew
+                    if (eew != null) addEewCard(content, content.childCount, eew, places)
+                }
+                content.addView(sectionCard(s))
+            }
+        }
+        val exitBtn = Button(this)
+        exitBtn.text = "テスト表示を終了"
+        exitBtn.setOnClickListener { disableDemo() }
+        content.addView(exitBtn)
     }
 
     // ----------------------------------------
@@ -597,6 +651,16 @@ class MainActivity : Activity() {
         }
         content.addView(modeSaveBtn)
         content.addView(serverStatus)
+        // 🧪 テスト表示 (デモ)
+        val demoBtn = Button(this)
+        demoBtn.text = "🧪 テスト表示 (デモ)"
+        demoBtn.setOnClickListener {
+            if (demoMode) disableDemo() else enableDemo()
+        }
+        content.addView(demoBtn)
+        content.addView(
+            text("テスト表示はサンプルの警報・緊急地震速報 (カウントダウン付き) を表示するデモで、実際のデータに切り替わると自動で終了します。", 11f)
+        )
 
         content.addView(text("🔔 バックグラウンド同期と通知", 18f, true))
         val bgBtn = Button(this)
@@ -746,8 +810,16 @@ class MainActivity : Activity() {
                 }
             }
             runOnUiThread {
-                if (currentTab == "events") showTab("events")
-                else if (currentTab == "briefing") showTab("briefing")
+                // 🧪 テスト表示中は再生 (初期同期) で上書きせず、新規の実データが
+                // 届いたらテスト表示を終了する (旧実装と同じ)
+                if (demoMode && !replay) {
+                    demoMode = false
+                    demoEew = null
+                }
+                if (!demoMode) {
+                    if (currentTab == "events") showTab("events")
+                    else if (currentTab == "briefing") showTab("briefing")
+                }
             }
         }
         streamClient = client

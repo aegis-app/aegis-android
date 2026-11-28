@@ -10,6 +10,7 @@ import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.a2s.SseParser
 import jp.aegis.client.briefing.Briefing
+import jp.aegis.client.demo.Demo
 import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
@@ -569,6 +570,42 @@ fun main() {
         eq("server empty title", "🛡️ AEGIS ブリーフィング", emptySections[0].title)
         eq("server empty level", "warn", emptySections[0].level)
         eq("server broken json falls back", 1, ServerMode.parseSections("not json").size)
+    }
+
+    // ----------------------------------------
+    // 🧪 Demo: サンプル EEW とセクション
+    // ----------------------------------------
+    run {
+        val start = A2sParse.parseJstMillis("2026/11/28 12:00:00")
+        val eew = Demo.buildDemoEew(start)
+        eq("demo hypocenter", "テスト震源（サンプル）", eew.hypocenter)
+        eq("demo estScale", 45, eew.estScale)
+        eq("demo origin", "2026/11/28 12:00:00", eew.originTime)
+        check("demo not warn/cancel", !eew.isWarn && !eew.cancel)
+        eq("demo depth", 40, eew.depthKm)
+        // 到達は 30 秒後 (カウントダウンが実際に動く)
+        val places = jp.aegis.client.weather.DEFAULT_PLACES
+        val est = BooleanArray(1)
+        eq(
+            "demo arrival +30s", start + 30_000L,
+            EewCountdown.arrivalMillis(eew, places[0], est)
+        )
+        check("demo countdown active at start", EewCountdown.countdownActive(eew, places, start))
+        check(
+            "demo countdown body ticks",
+            EewCountdown.countdownBody(eew, places, start).contains("あと約30秒")
+        )
+        eq("demo banner title", "🧪 テスト表示中", Demo.banner().title)
+        check("demo banner body", Demo.banner().body.contains("サンプルデータです"))
+        val bSections = Demo.briefingSections()
+        eq("demo briefing sections", 4, bSections.size)
+        eq("demo briefing summary title", "📌 現在のまとめ", bSections[1].title)
+        check("demo briefing summary body", bSections[1].body.contains("大雨警報"))
+        val eSections = Demo.eventsSections(start)
+        eq("demo events sections", 4, eSections.size)
+        eq("demo events tsunami level", "ok", eSections[1].level)
+        check("demo events quake1", eSections[2].body.contains("M5.8"))
+        check("demo events quake2 is 42min ago", eSections[3].body.contains(Demo.formatShort(start - 42 * 60000L)))
     }
 
     // ----------------------------------------
