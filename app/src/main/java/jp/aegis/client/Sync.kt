@@ -14,6 +14,11 @@ import jp.aegis.client.a2s.A2sHttp
 import jp.aegis.client.a2s.A2sParse
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
+import jp.aegis.client.briefing.Briefing
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 // ========================================
 // 🔔 Sync (バックグラウンド同期と通知)
@@ -31,6 +36,8 @@ object Sync {
     private const val CH_URGENT = "urgent" // 緊急通知チャンネル (EEW・津波)
     private const val CH_NOTICE = "notice" // 防災通知チャンネル (地震・警報)
     private const val REQ_SYNC = 2001      // 同期アラームの PendingIntent 識別子
+    private const val REQ_BRIEFING_AM = 2002 // 朝ブリーフィングのアラーム識別子
+    private const val REQ_BRIEFING_PM = 2003 // 夜ブリーフィングのアラーム識別子
 
     // ----------------------------------------
     // ⏰ スケジュール
@@ -53,11 +60,42 @@ object Sync {
     }
 
     private fun syncPendingIntent(ctx: Context): PendingIntent {
-        val intent = Intent(ctx, SyncReceiver::class.java)
+        val intent = Intent(ctx, SyncReceiver::class.java).setAction(SyncReceiver.ACTION_SYNC)
         return PendingIntent.getBroadcast(
             ctx, REQ_SYNC, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+    }
+
+    private fun briefingPendingIntent(ctx: Context, morning: Boolean): PendingIntent {
+        val intent = Intent(ctx, SyncReceiver::class.java)
+            .setAction(if (morning) SyncReceiver.ACTION_BRIEFING_AM else SyncReceiver.ACTION_BRIEFING_PM)
+        return PendingIntent.getBroadcast(
+            ctx, if (morning) REQ_BRIEFING_AM else REQ_BRIEFING_PM, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    // 🌅 朝夕ブリーフィング (7:00 / 21:00) の次回を両方予約する (OFF のときは取り消す)。
+    // 同期と違い A.A.S の設定有無には依存しない (旧実装と同じ)
+    fun scheduleBriefings(ctx: Context) {
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (!Settings.isBriefingEnabled(ctx)) {
+            am.cancel(briefingPendingIntent(ctx, true))
+            am.cancel(briefingPendingIntent(ctx, false))
+            return
+        }
+        scheduleBriefing(ctx, true)
+        scheduleBriefing(ctx, false)
+    }
+
+    // 🌅 朝夕ブリーフィングの片方の次回を予約する (壁時計基準。旧実装と同じ RTC_WAKEUP)
+    fun scheduleBriefing(ctx: Context, morning: Boolean) {
+        if (!Settings.isBriefingEnabled(ctx)) return
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val hour = if (morning) Briefing.MORNING_HOUR else Briefing.EVENING_HOUR
+        val at = Briefing.nextBriefingMillis(hour, 0, System.currentTimeMillis(), TimeZone.getDefault())
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, briefingPendingIntent(ctx, morning))
     }
 
     // ----------------------------------------
@@ -98,17 +136,58 @@ object Sync {
     }
 
     // ----------------------------------------
+    // 🌅 朝夕ブリーフィング本体 (ワーカースレッドから呼ぶ)
+    // ----------------------------------------
+
+    // 📝 最新のイベントから「現在のまとめ」を作って通知する。無効設定・
+    // 通知不許可・A.A.S 未設定 (まとめの材料が無い) のときは何もしない
+    fun runBriefing(ctx: Context, morning: Boolean) {
+        if (!Settings.isBriefingEnabled(ctx)) return
+        if (!notificationsAllowed(ctx)) return
+        val url = Settings.a2sUrl(ctx)
+        val token = Settings.a2sToken(ctx)
+        if (!A2sParse.isEnabled(url, token)) return
+        val events = try {
+            A2sHttp.fetchEvents(url, token, "", "", 50)
+        } catch (e: Exception) {
+            return // 到達不能時は静かに終わる (次回に通知する)
+        }
+        val summary = Briefing.summaryText(events, Settings.places(ctx))
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.JAPAN).format(Date())
+        postNotification(
+            ctx,
+            NotifyPlanner.Plan(
+                id = Briefing.notificationId(date, morning),
+                urgent = false,
+                title = Briefing.title(morning),
+                body = summary
+            ),
+            tab = "briefing"
+        )
+    }
+
+    // 🔔 通知を出せる状態か (実行時権限 + システム側の通知許可)
+    private fun notificationsAllowed(ctx: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return false
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        return nm.areNotificationsEnabled()
+    }
+
+    // ----------------------------------------
     // 🔔 通知の投稿
     // ----------------------------------------
 
-    // 📣 計画どおりに通知を 1 件投稿する (権限が無ければ何もしない)
-    fun postNotification(ctx: Context, plan: NotifyPlanner.Plan) {
+    // 📣 計画どおりに通知を 1 件投稿する (権限が無ければ何もしない)。
+    // tab はタップ時に開くタブ (既定はイベント、ブリーフィング通知はブリーフィング)
+    fun postNotification(ctx: Context, plan: NotifyPlanner.Plan, tab: String = "events") {
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
         ensureChannels(ctx)
         val intent = Intent(ctx, MainActivity::class.java)
-            .putExtra(EXTRA_TAB, "events")
+            .putExtra(EXTRA_TAB, tab)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pi = PendingIntent.getActivity(
             ctx, plan.id.hashCode(), intent,

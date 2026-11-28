@@ -13,6 +13,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
             Sync.scheduleNext(context.applicationContext)
+            Sync.scheduleBriefings(context.applicationContext)
         }
     }
 }

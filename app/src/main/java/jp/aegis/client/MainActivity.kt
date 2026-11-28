@@ -28,6 +28,7 @@ import jp.aegis.client.a2s.DisplayText
 import jp.aegis.client.a2s.EewCountdown
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
+import jp.aegis.client.briefing.Briefing
 import jp.aegis.client.news.News
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
@@ -73,6 +74,7 @@ class MainActivity : Activity() {
         currentTab = intent?.getStringExtra(Sync.EXTRA_TAB) ?: "briefing"
         showTab(currentTab)
         Sync.scheduleNext(applicationContext)
+        Sync.scheduleBriefings(applicationContext)
     }
 
     override fun onNewIntent(intent: android.content.Intent?) {
@@ -202,44 +204,14 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // 📝 「現在のまとめ」の本文: 警報 / 津波 / 最新地震 / 台風 を 1 枚に集約する
+    // 📝 「現在のまとめ」の本文: 組み立ては Briefing.summaryText (通知と共用)。
+    // ここでは A.A.S 未設定時の注記だけを足す
     private fun buildSummary(events: List<A2sEvent>, places: List<Place>): String {
-        val sb = StringBuilder()
-        val warnings = events.filter { it.kind == "warning" }
-        var anyWarning = false
-        for (place in places) {
-            val hit = warnings.firstOrNull {
-                val w = it.warning ?: return@firstOrNull false
-                w.officeCode == place.prefCode && (place.areaCode.isEmpty() || w.areaCode == place.areaCode)
-            }
-            if (hit != null) {
-                anyWarning = true
-                sb.append(place.name).append(": ")
-                    .append(hit.warning!!.warnings.joinToString("、") { w -> w.name })
-                    .append('\n')
-            }
-        }
-        if (!anyWarning) sb.append("発表中の警報・注意報はありません\n")
-        val tsunami = events.firstOrNull { it.kind == "tsunami" }
-        sb.append(
-            if (tsunami?.tsunami?.cancelled == false && tsunami.tsunami.areas.isNotEmpty())
-                "津波警報・注意報が発表されています\n"
-            else "津波警報・注意報はありません\n"
-        )
-        val quake = events.firstOrNull { it.kind == "quake" }
-        if (quake?.quake != null) {
-            sb.append("最新地震: ").append(quake.quake.hypocenter)
-                .append(" 最大震度 ").append(jp.aegis.client.a2s.scaleLabel(quake.quake.maxScale))
-                .append('\n')
-        }
-        val typhoon = events.firstOrNull { it.kind == "typhoon" }
-        if (typhoon?.typhoon != null) {
-            sb.append("台風: ").append(DisplayText.typhoonBody(typhoon.typhoon)).append('\n')
-        }
+        val base = Briefing.summaryText(events, places)
         if (!A2sParse.isEnabled(Settings.a2sUrl(this), Settings.a2sToken(this))) {
-            sb.append("※ A.A.S が未設定のため、地震・津波・警報・台風は表示されません (設定タブで接続できます)\n")
+            return base + "\n※ A.A.S が未設定のため、地震・津波・警報・台風は表示されません (設定タブで接続できます)"
         }
-        return sb.toString().trim()
+        return base
     }
 
     // 🌤️ 1 地点の天気テキスト (気象庁予報 + Open-Meteo 現在気象)
@@ -515,6 +487,19 @@ class MainActivity : Activity() {
             refreshBgBtn()
         }
         content.addView(bgBtn)
+        // 🌅 朝夕ブリーフィング通知 (7:00 / 21:00、任意)
+        val briefingBtn = Button(this)
+        fun refreshBriefingBtn() {
+            briefingBtn.text = "朝夕ブリーフィング通知 (7:00 / 21:00): " +
+                if (Settings.isBriefingEnabled(this)) "ON" else "OFF"
+        }
+        refreshBriefingBtn()
+        briefingBtn.setOnClickListener {
+            Settings.setBriefingEnabled(this, !Settings.isBriefingEnabled(this))
+            Sync.scheduleBriefings(applicationContext)
+            refreshBriefingBtn()
+        }
+        content.addView(briefingBtn)
         content.addView(labeledSpinner("同期間隔", listOf("15分", "30分", "60分"),
             listOf(15, 30, 60).indexOf(Settings.intervalMinutes(this)).coerceAtLeast(0)) { idx ->
             Settings.setIntervalMinutes(this, listOf(15, 30, 60)[idx])

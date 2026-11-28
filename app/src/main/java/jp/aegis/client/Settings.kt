@@ -18,6 +18,7 @@ object Settings {
     private const val PREFS = "aegis_prefs" // 設定ファイル名
     private const val KEY_A2S_URL = "a2s_url"         // A.A.S のベース URL (空なら無効)
     private const val KEY_A2S_TOKEN = "a2s_token"     // A.A.S のクライアントトークン
+    private const val KEY_BRIEFING = "briefing_notify"     // 朝夕ブリーフィング通知の有効化
     private const val KEY_BG_ENABLED = "bg_sync_enabled"   // バックグラウンド同期の有効化
     private const val KEY_BG_INTERVAL = "bg_sync_interval" // 同期間隔 (分)
     private const val KEY_QUAKE_THRESHOLD = "notify_quake_threshold" // 地震通知の震度しきい値 (コード)
@@ -70,6 +71,13 @@ object Settings {
 
     fun setWarnMode(ctx: Context, mode: Int) {
         prefs(ctx).edit().putInt(KEY_WARN_MODE, mode).apply()
+    }
+
+    // 🌅 朝夕ブリーフィング通知 (既定は OFF。旧実装と同じキー・既定値)
+    fun isBriefingEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_BRIEFING, false)
+
+    fun setBriefingEnabled(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_BRIEFING, on).apply()
     }
 
     // ----------------------------------------

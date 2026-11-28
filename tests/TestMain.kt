@@ -9,6 +9,7 @@ import jp.aegis.client.a2s.EewPayload
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.a2s.SseParser
+import jp.aegis.client.briefing.Briefing
 import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
@@ -381,6 +382,44 @@ fun main() {
         eq("missing note total loss", "", Radar.tileMissingNote("レーダータイル", 9, 0))
         check("missing note partial", Radar.tileMissingNote("レーダータイル", 9, 7).contains("7/9枚"))
         eq("missing note zero expected", "", Radar.tileMissingNote("地図タイル", 0, 0))
+    }
+
+    // ----------------------------------------
+    // 🌅 Briefing: 次回時刻・通知 ID・まとめ本文
+    // ----------------------------------------
+    run {
+        val tz = java.util.TimeZone.getTimeZone("Asia/Tokyo")
+        fun at(day: Int, hour: Int, minute: Int): Long {
+            val c = java.util.Calendar.getInstance(tz)
+            c.set(2026, java.util.Calendar.NOVEMBER, day, hour, minute, 0)
+            c.set(java.util.Calendar.MILLISECOND, 0)
+            return c.timeInMillis
+        }
+        eq("briefing same day 7:00", at(17, 7, 0), Briefing.nextBriefingMillis(7, 0, at(17, 6, 0), tz))
+        eq("briefing exactly 7:00 -> next day", at(18, 7, 0), Briefing.nextBriefingMillis(7, 0, at(17, 7, 0), tz))
+        eq("briefing 21:30 -> next day 7:00", at(18, 7, 0), Briefing.nextBriefingMillis(7, 0, at(17, 21, 30), tz))
+        eq("briefing same day 21:00", at(17, 21, 0), Briefing.nextBriefingMillis(21, 0, at(17, 20, 0), tz))
+        eq("briefing id am", "briefing:2026-11-28:am", Briefing.notificationId("2026-11-28", true))
+        eq("briefing id pm", "briefing:2026-11-28:pm", Briefing.notificationId("2026-11-28", false))
+        eq("briefing title am", "🌅 朝のブリーフィング", Briefing.title(true))
+        eq("briefing title pm", "🌆 夜のブリーフィング", Briefing.title(false))
+        // まとめ本文: 警報は地点に一致するものだけ、地震は最新 1 件
+        val places = jp.aegis.client.weather.DEFAULT_PLACES
+        val emptySummary = Briefing.summaryText(emptyList(), places)
+        check("summary no warnings line", emptySummary.contains("発表中の警報・注意報はありません"))
+        check("summary no tsunami line", emptySummary.contains("津波警報・注意報はありません"))
+        val quake = A2sParse.eventFromJsonString(quakeJson("2026-11-26T03:00:10.000Z"))!!
+        val warnGunma = A2sParse.eventFromJsonString(
+            """{"kind":"warning","key":"warning:100000:100010","updatedAt":"2026-11-26T03:00:10.000Z",
+                "receivedAt":"2026-11-26T03:00:10.000Z","officeCode":"100000","prefName":"群馬県",
+                "areaCode":"100010","areaName":"群馬県南部","reportDatetime":"2026/11/26 12:00:00",
+                "headline":"","warnings":[{"code":"33","name":"大雨警報","status":"発表","severity":3}],
+                "maxSeverity":3,"time":"2026/11/26 12:00:00","released":false}"""
+        )!!
+        val summary = Briefing.summaryText(listOf(quake, warnGunma), places)
+        check("summary warning for takasaki", summary.contains("高崎: 大雨警報"))
+        check("summary no warning for omiya", !summary.contains("大宮:"))
+        check("summary quake line", summary.contains("最新地震: 茨城県南部 最大震度 4"))
     }
 
     // ----------------------------------------
