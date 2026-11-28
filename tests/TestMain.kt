@@ -8,6 +8,7 @@ import jp.aegis.client.a2s.SseParser
 import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
+import jp.aegis.client.places.Places
 import jp.aegis.client.weather.WeatherParse
 
 // ========================================
@@ -267,6 +268,41 @@ fun main() {
         eq("generic kind parsed", "tornado", g.kind)
         check("generic body has line", DisplayText.body(g).contains("群馬県竜巻注意情報"))
         check("generic never notifies", NotifyPlanner.plan(g, false, true, 0L, 10, 2) == null)
+    }
+
+    // ----------------------------------------
+    // 📍 Places: 都道府県テーブル・距離・座標検証・区域解析
+    // ----------------------------------------
+    run {
+        eq("47 prefectures", 47, Places.PREFS.size)
+        eq("prefName gunma", "群馬県", Places.prefNameForCode("100000"))
+        eq("prefName tokyo", "東京都", Places.prefNameForCode("130000"))
+        eq("prefName unknown", "", Places.prefNameForCode("999999"))
+        eq("prefName null", "", Places.prefNameForCode(null))
+        // 球面距離: 高崎〜大宮は約 72.5km
+        val distKm = Places.haversineKm(36.3219, 139.0023, 35.9064, 139.6239)
+        check("haversine takasaki-omiya ~72.5km", distKm > 68 && distKm < 77)
+        eq("nearestPref takasaki", "100000", Places.nearestPref(36.3219, 139.0023).code)
+        eq("nearestPref omiya", "110000", Places.nearestPref(35.9064, 139.6239).code)
+        eq("nearestPref tokyo", "130000", Places.nearestPref(35.6895, 139.6917).code)
+        // 座標の範囲チェック
+        eq("coord ok", "", Places.coordRangeError(35.0, 139.0))
+        eq("coord lat range", "緯度は -90〜90 の範囲で入力してください", Places.coordRangeError(91.0, 139.0))
+        eq("coord lon range", "経度は -180〜180 の範囲で入力してください", Places.coordRangeError(35.0, 181.0))
+        eq("coord NaN", "緯度・経度が不正です", Places.coordRangeError(Double.NaN, 139.0))
+        eq("japan warning inside", "", Places.coordJapanWarning(35.0, 139.0))
+        check("japan warning outside", Places.coordJapanWarning(0.0, 0.0).isNotEmpty())
+        // 予報 JSON の一次細分区域 (名称 + コード、重複名は畳む)
+        val forecastJson = """[{"timeSeries":[{"areas":[
+          {"area":{"name":"南部","code":"100010"},"weatherCodes":["200"]},
+          {"area":{"name":"北部","code":"100020"},"weatherCodes":["100"]},
+          {"area":{"name":"南部","code":"100010"},"weatherCodes":["200"]}]}]}]"""
+        val fAreas = Places.parseForecastAreas(forecastJson)
+        eq("forecast areas count", 3, fAreas.size)
+        eq("forecast area first name", "南部", fAreas[0].name)
+        eq("forecast area first code", "100010", fAreas[0].code)
+        eq("forecast area names dedup", listOf("南部", "北部"), Places.forecastAreaNames(forecastJson))
+        eq("forecast areas broken", 0, Places.parseForecastAreas("{}").size)
     }
 
     // ----------------------------------------

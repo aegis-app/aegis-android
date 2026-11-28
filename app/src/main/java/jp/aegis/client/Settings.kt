@@ -86,7 +86,12 @@ object Settings {
             val lat = MiniJson.numOrNull(m, "lat") ?: continue
             val lon = MiniJson.numOrNull(m, "lon") ?: continue
             if (name.isEmpty()) continue
-            out.add(Place(name, lat, lon, MiniJson.str(m, "prefCode"), MiniJson.str(m, "areaCode")))
+            out.add(
+                Place(
+                    name, lat, lon, MiniJson.str(m, "prefCode"),
+                    MiniJson.str(m, "areaCode"), MiniJson.str(m, "areaName")
+                )
+            )
         }
         return out
     }
@@ -102,6 +107,7 @@ object Settings {
                 .append(",\"lon\":").append(p.lon)
                 .append(",\"prefCode\":").append(jsonString(p.prefCode))
                 .append(",\"areaCode\":").append(jsonString(p.areaCode))
+                .append(",\"areaName\":").append(jsonString(p.areaName))
                 .append('}')
         }
         sb.append(']')

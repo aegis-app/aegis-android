@@ -5,8 +5,11 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -23,6 +26,8 @@ import jp.aegis.client.a2s.A2sStreamClient
 import jp.aegis.client.a2s.DisplayText
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
+import jp.aegis.client.places.Places
+import jp.aegis.client.places.Pref
 import jp.aegis.client.weather.Place
 import jp.aegis.client.weather.WeatherParse
 
@@ -254,12 +259,9 @@ class MainActivity : Activity() {
         return if (s.isEmpty()) "天気を取得できませんでした" else s
     }
 
-    // 🗾 地点の都道府県名 (EEW 到達予想の照合用)。地点名そのものを既定にする
-    private fun prefNameOf(place: Place): String = when (place.prefCode) {
-        "100000" -> "群馬県"
-        "110000" -> "埼玉県"
-        else -> place.name
-    }
+    // 🗾 地点の都道府県名 (EEW 到達予想の照合用)。テーブルに無いコードは地点名で代替する
+    private fun prefNameOf(place: Place): String =
+        Places.prefNameForCode(place.prefCode).ifEmpty { place.name }
 
     // ----------------------------------------
     // 📋 イベント画面
@@ -382,22 +384,48 @@ class MainActivity : Activity() {
         val lonInput = EditText(this); lonInput.hint = "経度 (例: 139.69)"
         val prefInput = EditText(this); prefInput.hint = "都道府県コード (例: 130000)"
         val areaInput = EditText(this); areaInput.hint = "一次細分区域コード (例: 130010)"
+        val areaNameInput = EditText(this); areaNameInput.hint = "一次細分区域名 (例: 南部)"
         content.addView(nameInput); content.addView(latInput); content.addView(lonInput)
-        content.addView(prefInput); content.addView(areaInput)
+        content.addView(prefInput); content.addView(areaInput); content.addView(areaNameInput)
+        val placeStatus = text(placeStatusMessage, 13f)
         val addBtn = Button(this)
         addBtn.text = "地点を追加"
         addBtn.setOnClickListener {
             val lat = latInput.text.toString().toDoubleOrNull()
             val lon = lonInput.text.toString().toDoubleOrNull()
-            if (nameInput.text.isNotEmpty() && lat != null && lon != null) {
-                Settings.addPlace(
-                    this,
-                    Place(nameInput.text.toString(), lat, lon, prefInput.text.toString(), areaInput.text.toString())
-                )
-                showTab("settings")
+            if (nameInput.text.isEmpty() || lat == null || lon == null) {
+                placeStatusMessage = "地点名・緯度・経度を入力してください"
+                placeStatus.text = placeStatusMessage
+                return@setOnClickListener
             }
+            // ⚠️ 座標の範囲チェック (旧実装と同じ): 範囲外は登録しない。日本域外は警告したうえで登録する
+            val rangeError = Places.coordRangeError(lat, lon)
+            if (rangeError.isNotEmpty()) {
+                placeStatusMessage = rangeError
+                placeStatus.text = placeStatusMessage
+                return@setOnClickListener
+            }
+            Settings.addPlace(
+                this,
+                Place(
+                    nameInput.text.toString(), lat, lon, prefInput.text.toString(),
+                    areaInput.text.toString(), areaNameInput.text.toString()
+                )
+            )
+            val japanWarning = Places.coordJapanWarning(lat, lon)
+            placeStatusMessage = "地点「" + nameInput.text.toString() + "」を追加しました" +
+                if (japanWarning.isNotEmpty()) "\n" + japanWarning else ""
+            showTab("settings")
         }
         content.addView(addBtn)
+        // 📍 GPS: 現在地を取得し、都道府県を推定して地域を選んで登録する
+        gpsStatus = placeStatus
+        val gpsBtn = Button(this)
+        gpsBtn.text = "📍 現在地 (GPS) を取得して地点登録"
+        gpsBtn.setOnClickListener { onGpsClicked() }
+        content.addView(gpsBtn)
+        content.addView(text("GPSで取得した位置から都道府県を推定し、地域区分を選んで「現在地」として登録します。", 12f))
+        content.addView(placeStatus)
         content.addView(text("登録地点: " + Settings.places(this).joinToString("、") { it.name }, 13f))
         content.addView(text("AEGIS Android v1.0.0", 12f))
     }
@@ -468,4 +496,166 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
     }
+
+    // ========================================
+    // 📍 GPS 地点登録 (旧実装と同じ流れ)
+    // ========================================
+    // 📝 権限確認 → 許可リクエスト → 最終位置 (10 分以内なら即利用) →
+    // 無ければ 1 回だけの更新要求 (15 秒タイムアウト) → 都道府県推定 →
+    // 一次細分区域を選んで「現在地 (区域名)」として登録する
+
+    private var gpsStatus: TextView? = null
+    private var placeStatusMessage: String = ""
+    private var gpsListener: GpsListener? = null
+    private val gpsTimeoutHandler = Handler(Looper.getMainLooper())
+    private val gpsTimeoutTask = Runnable {
+        stopGpsUpdates()
+        placeStatusMessage = "現在地を取得できませんでした (タイムアウト)。電波の良い場所で再試行してください"
+        gpsStatus?.text = placeStatusMessage
+    }
+
+    // 📍 地点まわりの状態文を更新する (再描画後も残るよう保持する)
+    private fun setPlaceStatus(msg: String) {
+        placeStatusMessage = msg
+        gpsStatus?.text = msg
+    }
+
+    // 📍 GPS ボタン: 権限が無ければリクエストし、あれば取得を開始する
+    private fun onGpsClicked() {
+        val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) {
+            setPlaceStatus("位置情報の許可が必要です")
+            requestPermissions(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                REQ_LOCATION
+            )
+            return
+        }
+        fetchGpsLocation()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_LOCATION) return
+        val granted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+        if (granted) {
+            fetchGpsLocation()
+        } else {
+            setPlaceStatus("位置情報の許可が必要です")
+        }
+    }
+
+    // 📡 位置の取得: 最終位置が 10 分以内なら即利用、無ければ 1 回だけ更新を要求する
+    private fun fetchGpsLocation() {
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        setPlaceStatus("現在地を取得中…")
+        try {
+            var last: android.location.Location? = null
+            for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                try {
+                    val loc = lm.getLastKnownLocation(provider)
+                    if (loc != null && (last == null || loc.time > last.time)) last = loc
+                } catch (e: Exception) {
+                    // 権限・プロバイダ事情で取れない場合は次の候補へ
+                }
+            }
+            val tenMinAgo = System.currentTimeMillis() - 10 * 60 * 1000
+            if (last != null && last.time >= tenMinAgo) {
+                onGpsFix(last)
+                return
+            }
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                else -> null
+            }
+            if (provider == null) {
+                setPlaceStatus("位置情報が無効です。端末の設定で位置情報をオンにしてください")
+                return
+            }
+            stopGpsUpdates()
+            val listener = GpsListener(this)
+            gpsListener = listener
+            @Suppress("DEPRECATION")
+            lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            gpsTimeoutHandler.removeCallbacks(gpsTimeoutTask)
+            gpsTimeoutHandler.postDelayed(gpsTimeoutTask, 15_000)
+        } catch (e: Exception) {
+            setPlaceStatus("現在地を取得できませんでした: " + (e.message ?: ""))
+        }
+    }
+
+    // 🛑 GPS の更新要求とタイムアウトを取り消す
+    private fun stopGpsUpdates() {
+        gpsTimeoutHandler.removeCallbacks(gpsTimeoutTask)
+        val listener = gpsListener ?: return
+        gpsListener = null
+        try {
+            (getSystemService(LOCATION_SERVICE) as LocationManager).removeUpdates(listener)
+        } catch (e: Exception) {
+            // 取り消し失敗は無視する (取得自体は終わっている)
+        }
+    }
+
+    // 📍 位置が取れたら: 都道府県を推定し、一次細分区域の一覧から選んで登録する
+    internal fun onGpsFix(loc: android.location.Location) {
+        stopGpsUpdates()
+        val pref = Places.nearestPref(loc.latitude, loc.longitude)
+        setPlaceStatus("現在地を取得しました。地域区分を取得中…")
+        Thread {
+            var areas: List<Places.ForecastArea> = emptyList()
+            try {
+                val json = A2sHttp.fetchOnce(WeatherParse.jmaForecastUrl(pref.code), "")
+                areas = Places.parseForecastAreas(json)
+            } catch (e: Exception) {
+                // 地域一覧が取れなければ都道府県単位で登録する
+            }
+            runOnUiThread { showGpsAreaChoice(pref, loc.latitude, loc.longitude, areas) }
+        }.start()
+    }
+
+    // 🗾 一次細分区域の選択ダイアログ (取れなかった場合は県単位でそのまま登録)
+    private fun showGpsAreaChoice(pref: Pref, lat: Double, lon: Double, areas: List<Places.ForecastArea>) {
+        if (areas.isEmpty()) {
+            registerGpsLocation(pref, lat, lon, "", "")
+            return
+        }
+        val names = areas.map { it.name }.distinct().toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(pref.name + " の地域区分を選択")
+            .setItems(names) { _, which ->
+                val area = areas.first { it.name == names[which] }
+                registerGpsLocation(pref, lat, lon, area.name, area.code)
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // ✅ GPS 地点を「現在地 (区域名)」として登録する
+    private fun registerGpsLocation(pref: Pref, lat: Double, lon: Double, areaName: String, areaCode: String) {
+        val label = if (areaName.isEmpty()) "現在地" else "現在地（" + areaName + "）"
+        Settings.addPlace(this, Place(label, lat, lon, pref.code, areaCode, areaName))
+        setPlaceStatus("地点「" + label + "」を登録しました (" + pref.name + ")")
+        showTab("settings")
+    }
+
+    companion object {
+        // 📍 位置情報の許可リクエストコード
+        private const val REQ_LOCATION = 1002
+    }
+}
+
+// ========================================
+// 📍 GPS の 1 回だけの位置取得リスナー
+// ========================================
+// 📝 名前付きクラスにする (旧実装と同じ方針: 匿名クラスは dex 化で不利なため)。
+// 位置が 1 件届いたら Activity 側の onGpsFix へ渡す
+private class GpsListener(private val activity: MainActivity) : android.location.LocationListener {
+    override fun onLocationChanged(location: android.location.Location) {
+        activity.onGpsFix(location)
+    }
+
+    override fun onProviderEnabled(provider: String) {}
+    override fun onProviderDisabled(provider: String) {}
 }
