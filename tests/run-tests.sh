@@ -35,6 +35,7 @@ trap 'rm -rf "$OUT"' EXIT
   app/src/main/java/jp/aegis/client/a2s/EventStore.kt \
   app/src/main/java/jp/aegis/client/a2s/SseParser.kt \
   app/src/main/java/jp/aegis/client/a2s/DisplayText.kt \
+  app/src/main/java/jp/aegis/client/a2s/EewCountdown.kt \
   app/src/main/java/jp/aegis/client/a2s/NotifyPlanner.kt \
   app/src/main/java/jp/aegis/client/news/News.kt \
   app/src/main/java/jp/aegis/client/places/Places.kt \

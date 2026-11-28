@@ -25,6 +25,7 @@ import jp.aegis.client.a2s.A2sHttp
 import jp.aegis.client.a2s.A2sParse
 import jp.aegis.client.a2s.A2sStreamClient
 import jp.aegis.client.a2s.DisplayText
+import jp.aegis.client.a2s.EewCountdown
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.news.News
@@ -86,6 +87,7 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        stopEewTicker()
         streamClient?.stop()
         streamClient = null
         super.onStop()
@@ -109,6 +111,7 @@ class MainActivity : Activity() {
     }
 
     private fun showTab(id: String) {
+        stopEewTicker()
         currentTab = id
         content.removeAllViews()
         when (id) {
@@ -190,8 +193,7 @@ class MainActivity : Activity() {
                 // 🚨 新鮮な EEW があれば最上部に固定表示する
                 val eew = store.latestEew()?.eew
                 if (eew != null && DisplayText.isEewFresh(eew, System.currentTimeMillis())) {
-                    val prefs = places.map { prefNameOf(it) }
-                    summaryBox.addView(card(DisplayText.eewTitle(eew), DisplayText.eewBody(eew, prefs)), 0)
+                    addEewCard(summaryBox, 0, eew, places)
                 }
                 for ((name, body) in weatherCards) {
                     weatherBox.addView(card(name, body))
@@ -270,6 +272,54 @@ class MainActivity : Activity() {
     // 🗾 地点の都道府県名 (EEW 到達予想の照合用)。テーブルに無いコードは地点名で代替する
     private fun prefNameOf(place: Place): String =
         Places.prefNameForCode(place.prefCode).ifEmpty { place.name }
+
+    // ----------------------------------------
+    // ⏱️ EEW カードと到達カウントダウン
+    // ----------------------------------------
+
+    private val eewHandler = Handler(Looper.getMainLooper())
+    private var eewTicker: Runnable? = null
+
+    // 🛑 カウントダウンの 1 秒ティッカーを止める (タブ切り替え・画面離脱時)
+    private fun stopEewTicker() {
+        val ticker = eewTicker ?: return
+        eewTicker = null
+        eewHandler.removeCallbacks(ticker)
+    }
+
+    // 🚨 EEW カードを追加する。到達カウントダウンが生きている間は 1 秒ごとに
+    // 本文を再計算し、終わったら静的本文 (到達予想つき) に戻す。
+    // 取消報ではティッカーを回さず取消文のままにする
+    private fun addEewCard(parent: LinearLayout, index: Int, eew: jp.aegis.client.a2s.EewPayload, places: List<Place>) {
+        stopEewTicker()
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(8, 8, 8, 8)
+        box.setBackgroundColor(Color.rgb(245, 245, 245))
+        box.addView(text(DisplayText.eewTitle(eew), 16f, true))
+        val bodyView = text(DisplayText.eewBody(eew, places.map { prefNameOf(it) }), 14f)
+        box.addView(bodyView)
+        val lp = LinearLayout.LayoutParams(-1, -2)
+        lp.setMargins(8, 8, 8, 8)
+        box.layoutParams = lp
+        parent.addView(box, index)
+        if (!EewCountdown.countdownActive(eew, places, System.currentTimeMillis())) return
+        bodyView.text = EewCountdown.countdownBody(eew, places, System.currentTimeMillis())
+        val ticker = object : Runnable {
+            override fun run() {
+                val now = System.currentTimeMillis()
+                if (EewCountdown.countdownActive(eew, places, now)) {
+                    bodyView.text = EewCountdown.countdownBody(eew, places, now)
+                    eewHandler.postDelayed(this, 1000)
+                } else {
+                    bodyView.text = DisplayText.eewBody(eew, places.map { prefNameOf(it) })
+                    eewTicker = null
+                }
+            }
+        }
+        eewTicker = ticker
+        eewHandler.postDelayed(ticker, 1000)
+    }
 
     // ----------------------------------------
     // 📋 イベント画面

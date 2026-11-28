@@ -2,6 +2,10 @@ package jp.aegis.client
 
 import jp.aegis.client.a2s.A2sParse
 import jp.aegis.client.a2s.DisplayText
+import jp.aegis.client.a2s.EewAreaArrival
+import jp.aegis.client.a2s.EewAreaScale
+import jp.aegis.client.a2s.EewCountdown
+import jp.aegis.client.a2s.EewPayload
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.a2s.SseParser
@@ -377,6 +381,69 @@ fun main() {
         eq("missing note total loss", "", Radar.tileMissingNote("レーダータイル", 9, 0))
         check("missing note partial", Radar.tileMissingNote("レーダータイル", 9, 7).contains("7/9枚"))
         eq("missing note zero expected", "", Radar.tileMissingNote("地図タイル", 0, 0))
+    }
+
+    // ----------------------------------------
+    // ⏱️ EewCountdown: 到達推定・地域照合・カウントダウン
+    // ----------------------------------------
+    run {
+        val takasaki = jp.aegis.client.weather.DEFAULT_PLACES[0]
+        fun mkEew(
+            originTime: String, lat: Double?, lon: Double?, depthKm: Int?,
+            arrivals: List<EewAreaArrival> = emptyList(),
+            scales: List<EewAreaScale> = emptyList(), cancel: Boolean = false
+        ) = EewPayload(
+            baseKey = "k", time = originTime, originTime = originTime, cancel = cancel,
+            isWarn = true, serial = 1, eventId = null, isAssumption = false, isFinal = false,
+            hypocenter = "テスト震源", estScale = 45, estMagnitude = 5.0,
+            lat = lat, lon = lon, depthKm = depthKm, areaScales = scales, areaArrivals = arrivals
+        )
+        // S 波推定: 震源直上 (震央距離 0)・深さ 35km → 35/3.5 = 10 秒後
+        val est = BooleanArray(1)
+        val swEew = mkEew("1970/01/01 09:16:40", takasaki.lat, takasaki.lon, 35)
+        eq("arrival S-wave estimate", 1_010_000L, EewCountdown.arrivalMillis(swEew, takasaki, est))
+        check("arrival S-wave flagged estimated", est[0])
+        // 到達予想時刻があればそれを優先する
+        val arrEew = mkEew(
+            "2026/11/26 12:00:00", null, null, null,
+            arrivals = listOf(EewAreaArrival("群馬県", "2026/11/26 12:01:00"))
+        )
+        val expectedArr = A2sParse.parseJstMillis("2026/11/26 12:01:00")
+        eq("arrival uses area arrivalTime", expectedArr, EewCountdown.arrivalMillis(arrEew, takasaki, est))
+        check("arrival from table not estimated", !est[0])
+        // 情報が無ければ -1
+        val noEew = mkEew("2026/11/26 12:00:00", null, null, null)
+        eq("arrival unknown is -1", -1L, EewCountdown.arrivalMillis(noEew, takasaki, est))
+        // カウントダウンの活性判定: 到達前は true、到達 +30 秒を過ぎたら false、取消は false
+        check("countdown active before arrival", EewCountdown.countdownActive(arrEew, listOf(takasaki), expectedArr - 5000))
+        check("countdown ends after +30s", !EewCountdown.countdownActive(arrEew, listOf(takasaki), expectedArr + 31000))
+        val cancelEew = mkEew(
+            "2026/11/26 12:00:00", null, null, null,
+            arrivals = listOf(EewAreaArrival("群馬県", "2026/11/26 12:01:00")), cancel = true
+        )
+        check("countdown inactive on cancel", !EewCountdown.countdownActive(cancelEew, listOf(takasaki), expectedArr - 5000))
+        // 地域照合: 都道府県で絞り、区域名の一致を優先する
+        val scaleEew = mkEew(
+            "2026/11/26 12:00:00", null, null, null,
+            scales = listOf(
+                EewAreaScale("群馬県", "群馬県北部", 30, null),
+                EewAreaScale("群馬県", "群馬県南部", 40, null),
+                EewAreaScale("埼玉県", "埼玉県南部", 45, null)
+            )
+        )
+        eq("area match by areaName", "群馬県南部", EewCountdown.eewAreaForLocation(scaleEew, takasaki)?.name)
+        val noAreaPlace = jp.aegis.client.weather.Place("高崎", 36.32, 139.00, "100000", "")
+        eq("area fallback is max scale in pref", "群馬県南部", EewCountdown.eewAreaForLocation(scaleEew, noAreaPlace)?.name)
+        check(
+            "local forecast text",
+            EewCountdown.localForecastText(scaleEew, listOf(takasaki))
+                .contains("高崎: 予想震度 4（推定・対象地域「群馬県南部」）")
+        )
+        // カウントダウン本文: 残り秒数と到達後の文言
+        val bodyBefore = EewCountdown.countdownBody(arrEew, listOf(takasaki), expectedArr - 5000)
+        check("countdown body seconds", bodyBefore.contains("⏱ 高崎: あと約5秒"))
+        val bodyAfter = EewCountdown.countdownBody(arrEew, listOf(takasaki), expectedArr + 10000)
+        check("countdown body arrived", bodyAfter.contains("⏱ 高崎: 到達した可能性が高いです"))
     }
 
     // ----------------------------------------
