@@ -1,0 +1,32 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'jp.aegis.client'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'jp.aegis.client'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 📝 No external dependencies: data access uses only the Android standard
+// library plus the in-repo MiniJson parser, and the UI is built with the
+// platform View toolkit. Nothing needs to be downloaded to build this app.
+dependencies {
+}
