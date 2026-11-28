@@ -33,6 +33,7 @@ import jp.aegis.client.news.News
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
 import jp.aegis.client.radar.RadarComposer
+import jp.aegis.client.server.ServerMode
 import jp.aegis.client.weather.Place
 import jp.aegis.client.weather.WeatherParse
 
@@ -156,6 +157,11 @@ class MainActivity : Activity() {
     // ----------------------------------------
 
     private fun renderBriefing() {
+        // 🌐 サーバーモードでは AEGIS サーバーのブリーフィングを表示する
+        if (Settings.isServerMode(this)) {
+            renderServerSections("📌 AEGISサーバー ブリーフィング")
+            return
+        }
         content.addView(text("📌 現在のまとめ", 18f, true))
         val summaryBox = LinearLayout(this)
         summaryBox.orientation = LinearLayout.VERTICAL
@@ -298,6 +304,11 @@ class MainActivity : Activity() {
     // ----------------------------------------
 
     private fun renderEvents() {
+        // 🌐 サーバーモードではイベントタブもサーバーの内容を表示する (旧実装と同じ)
+        if (Settings.isServerMode(this)) {
+            renderServerSections("📋 AEGISサーバー イベント")
+            return
+        }
         content.addView(text("📋 イベント (新しい順)", 18f, true))
         val list = store.snapshot()
         if (list.isEmpty()) {
@@ -330,6 +341,64 @@ class MainActivity : Activity() {
             }
             content.addView(b)
         }
+    }
+
+    // ----------------------------------------
+    // 🌐 サーバーモードの表示
+    // ----------------------------------------
+
+    // 🎨 重要度レベルで背景色を変えたセクションカード
+    private fun sectionCard(section: TextSection): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(8, 8, 8, 8)
+        box.setBackgroundColor(
+            when (section.level) {
+                "danger" -> Color.rgb(255, 235, 238)
+                "warn" -> Color.rgb(255, 248, 225)
+                "ok" -> Color.rgb(232, 245, 233)
+                else -> Color.rgb(245, 245, 245)
+            }
+        )
+        box.addView(text(section.title, 16f, true))
+        box.addView(text(section.body, 14f))
+        val lp = LinearLayout.LayoutParams(-1, -2)
+        lp.setMargins(8, 8, 8, 8)
+        box.layoutParams = lp
+        return box
+    }
+
+    // 📡 AEGIS サーバーの /api/briefing を取得してセクション表示する
+    private fun renderServerSections(header: String) {
+        content.addView(text(header, 18f, true))
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        content.addView(box)
+        box.addView(text("読み込み中…", 13f))
+        val base = Settings.serverUrl(this)
+        Thread {
+            try {
+                val sections = ServerMode.fetchSections(base)
+                runOnUiThread {
+                    box.removeAllViews()
+                    for (s in sections) box.addView(sectionCard(s))
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    box.removeAllViews()
+                    box.addView(
+                        sectionCard(
+                            TextSection(
+                                "サーバーから取得できませんでした",
+                                (e.message ?: "通信エラー") +
+                                    "\nAEGISサーバーが起動していて、URLが正しいか確認してください。",
+                                "warn"
+                            )
+                        )
+                    )
+                }
+            }
+        }.start()
     }
 
     // ----------------------------------------
@@ -474,6 +543,60 @@ class MainActivity : Activity() {
         }
         content.addView(testBtn)
         content.addView(status)
+
+        // 🌐 取得モード (直接取得 / AEGIS サーバー)
+        content.addView(text("🌐 取得モード", 18f, true))
+        content.addView(
+            text(
+                "・直接取得: 地震・津波・EEW・警報・台風は A.A.S 経由、天気は気象庁・Open-Meteo から取得します (推奨)\n" +
+                    "・AEGISサーバー: PC等で動いている AEGIS (serve) の /api/briefing を表示します\n\n" +
+                    "サーバーURLの例:\n・同じWi-FiのPC: http://192.168.1.10:8765\n" +
+                    "・AndroidエミュレータからPC: http://10.0.2.2:8765\n\n" +
+                    "レーダー・ニュースは直接取得の機能です (サーバーモードでも使えます)。",
+                12f
+            )
+        )
+        val modeBtn = Button(this)
+        fun refreshModeBtn() {
+            modeBtn.text = "取得モード: " + if (Settings.isServerMode(this)) "AEGISサーバーから取得" else "直接取得 (推奨)"
+        }
+        refreshModeBtn()
+        modeBtn.setOnClickListener {
+            Settings.setMode(this, if (Settings.isServerMode(this)) "direct" else "server")
+            refreshModeBtn()
+        }
+        content.addView(modeBtn)
+        val serverUrlInput = EditText(this)
+        serverUrlInput.hint = "AEGISサーバーの URL (例: http://192.168.1.10:8765)"
+        serverUrlInput.setText(Settings.serverUrl(this))
+        content.addView(serverUrlInput)
+        val serverStatus = text("", 13f)
+        val serverTestBtn = Button(this)
+        serverTestBtn.text = "接続テスト (サーバーURL)"
+        serverTestBtn.setOnClickListener {
+            val url = ServerMode.historyUrl(serverUrlInput.text.toString())
+            serverStatus.text = "接続テスト中… " + url
+            Thread {
+                val msg = try {
+                    val body = A2sHttp.fetchOnce(url, "")
+                    "✅ 接続OK: " + url + " (応答 " + body.length + " 文字)"
+                } catch (e: Exception) {
+                    "❌ 接続失敗: " + (e.message ?: "通信エラー") + " (サーバー起動とURL・同一Wi-Fiを確認)"
+                }
+                runOnUiThread { serverStatus.text = msg }
+            }.start()
+        }
+        content.addView(serverTestBtn)
+        val modeSaveBtn = Button(this)
+        modeSaveBtn.text = "設定を保存"
+        modeSaveBtn.setOnClickListener {
+            Settings.setServerUrl(this, serverUrlInput.text.toString())
+            val modeLabel = if (Settings.isServerMode(this)) "AEGISサーバー" else "直接取得"
+            serverStatus.text = "設定を保存しました (モード: " + modeLabel + ")"
+            showTab("briefing")
+        }
+        content.addView(modeSaveBtn)
+        content.addView(serverStatus)
 
         content.addView(text("🔔 バックグラウンド同期と通知", 18f, true))
         val bgBtn = Button(this)

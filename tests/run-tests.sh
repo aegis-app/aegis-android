@@ -28,6 +28,7 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 # 📝 テスト対象は純粋層のみ (json / a2s の解析・ストア・通知判定・表示文 / weather の解析)
 "$KOTLINC" -nowarn -d "$OUT" \
+  app/src/main/java/jp/aegis/client/Sections.kt \
   app/src/main/java/jp/aegis/client/json/MiniJson.kt \
   app/src/main/java/jp/aegis/client/a2s/A2sModels.kt \
   app/src/main/java/jp/aegis/client/a2s/A2sHttp.kt \
@@ -41,6 +42,7 @@ trap 'rm -rf "$OUT"' EXIT
   app/src/main/java/jp/aegis/client/news/News.kt \
   app/src/main/java/jp/aegis/client/places/Places.kt \
   app/src/main/java/jp/aegis/client/radar/Radar.kt \
+  app/src/main/java/jp/aegis/client/server/ServerMode.kt \
   app/src/main/java/jp/aegis/client/weather/WeatherParse.kt \
   tests/TestMain.kt
 "$JAVA" -cp "$OUT:$STDLIB" jp.aegis.client.TestMainKt

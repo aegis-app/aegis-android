@@ -17,6 +17,7 @@ import jp.aegis.client.news.News
 import jp.aegis.client.news.NewsItem
 import jp.aegis.client.places.Places
 import jp.aegis.client.radar.Radar
+import jp.aegis.client.server.ServerMode
 import jp.aegis.client.weather.WeatherParse
 
 // ========================================
@@ -535,6 +536,39 @@ fun main() {
         // 防災 10 件 → 8 件に切り詰める
         val capped = News.selectItems((1..10).map { item("大雨その$it", "https://example.jp/d$it") }, emptyList())
         eq("select caps at 8", 8, capped.size)
+    }
+
+    // ----------------------------------------
+    // 🌐 ServerMode: /api/briefing の変換
+    // ----------------------------------------
+    run {
+        eq("normalize trims slash", "http://h:8765", ServerMode.normalizeBase(" http://h:8765/ "))
+        eq("briefing url", "http://h:8765/api/briefing", ServerMode.briefingUrl("http://h:8765/"))
+        eq("history url", "http://h:8765/api/history", ServerMode.historyUrl("http://h:8765"))
+        eq("emoji critical", "🔴", ServerMode.severityEmoji("CRITICAL"))
+        eq("emoji high", "🟠", ServerMode.severityEmoji("HIGH"))
+        eq("emoji medium", "🟡", ServerMode.severityEmoji("MEDIUM"))
+        eq("emoji low", "🟢", ServerMode.severityEmoji("LOW"))
+        eq("emoji other", "ℹ️", ServerMode.severityEmoji("INFO"))
+        eq("level critical", "danger", ServerMode.levelOf("CRITICAL"))
+        eq("level high", "warn", ServerMode.levelOf("HIGH"))
+        eq("level medium", "warn", ServerMode.levelOf("MEDIUM"))
+        eq("level low", "info", ServerMode.levelOf("LOW"))
+        val json = """{"events":[
+          {"severity":"CRITICAL","title":"緊急地震速報","body":"本文です","action_guide":"頭を守ってください"},
+          {"severity":"LOW","title":"天気","body":"晴れです","action_guide":""}
+        ]}"""
+        val sections = ServerMode.parseSections(json)
+        eq("server sections count", 2, sections.size)
+        eq("server section title", "🔴 緊急地震速報", sections[0].title)
+        eq("server section level", "danger", sections[0].level)
+        check("server section guide appended", sections[0].body.contains("\n▶ 行動ガイド： 頭を守ってください"))
+        check("server section no empty guide", !sections[1].body.contains("行動ガイド"))
+        val emptySections = ServerMode.parseSections("""{"events":[]}""")
+        eq("server empty is one section", 1, emptySections.size)
+        eq("server empty title", "🛡️ AEGIS ブリーフィング", emptySections[0].title)
+        eq("server empty level", "warn", emptySections[0].level)
+        eq("server broken json falls back", 1, ServerMode.parseSections("not json").size)
     }
 
     // ----------------------------------------

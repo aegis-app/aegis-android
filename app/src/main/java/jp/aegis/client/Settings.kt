@@ -18,6 +18,8 @@ object Settings {
     private const val PREFS = "aegis_prefs" // 設定ファイル名
     private const val KEY_A2S_URL = "a2s_url"         // A.A.S のベース URL (空なら無効)
     private const val KEY_A2S_TOKEN = "a2s_token"     // A.A.S のクライアントトークン
+    private const val KEY_MODE = "mode"                    // 取得モード ("direct" / "server")
+    private const val KEY_SERVER_URL = "server_url"        // AEGIS サーバーの URL
     private const val KEY_BRIEFING = "briefing_notify"     // 朝夕ブリーフィング通知の有効化
     private const val KEY_BG_ENABLED = "bg_sync_enabled"   // バックグラウンド同期の有効化
     private const val KEY_BG_INTERVAL = "bg_sync_interval" // 同期間隔 (分)
@@ -71,6 +73,27 @@ object Settings {
 
     fun setWarnMode(ctx: Context, mode: Int) {
         prefs(ctx).edit().putInt(KEY_WARN_MODE, mode).apply()
+    }
+
+    // ----------------------------------------
+    // 🌐 取得モード (直接取得 / AEGIS サーバー)
+    // ----------------------------------------
+
+    // 🌐 取得モード (既定は "direct"。旧実装と同じキー)
+    fun mode(ctx: Context): String = prefs(ctx).getString(KEY_MODE, "direct") ?: "direct"
+
+    fun setMode(ctx: Context, mode: String) {
+        prefs(ctx).edit().putString(KEY_MODE, mode).apply()
+    }
+
+    fun isServerMode(ctx: Context): Boolean = mode(ctx) == "server"
+
+    // 🌐 AEGIS サーバーの URL (既定はエミュレータからホスト PC を指す 10.0.2.2)
+    fun serverUrl(ctx: Context): String =
+        prefs(ctx).getString(KEY_SERVER_URL, "http://10.0.2.2:8765") ?: "http://10.0.2.2:8765"
+
+    fun setServerUrl(ctx: Context, url: String) {
+        prefs(ctx).edit().putString(KEY_SERVER_URL, url.trim()).apply()
     }
 
     // 🌅 朝夕ブリーフィング通知 (既定は OFF。旧実装と同じキー・既定値)
