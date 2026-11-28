@@ -30,11 +30,13 @@ trap 'rm -rf "$OUT"' EXIT
 "$KOTLINC" -nowarn -d "$OUT" \
   app/src/main/java/jp/aegis/client/json/MiniJson.kt \
   app/src/main/java/jp/aegis/client/a2s/A2sModels.kt \
+  app/src/main/java/jp/aegis/client/a2s/A2sHttp.kt \
   app/src/main/java/jp/aegis/client/a2s/A2sParse.kt \
   app/src/main/java/jp/aegis/client/a2s/EventStore.kt \
   app/src/main/java/jp/aegis/client/a2s/SseParser.kt \
   app/src/main/java/jp/aegis/client/a2s/DisplayText.kt \
   app/src/main/java/jp/aegis/client/a2s/NotifyPlanner.kt \
+  app/src/main/java/jp/aegis/client/news/News.kt \
   app/src/main/java/jp/aegis/client/places/Places.kt \
   app/src/main/java/jp/aegis/client/radar/Radar.kt \
   app/src/main/java/jp/aegis/client/weather/WeatherParse.kt \

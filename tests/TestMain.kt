@@ -8,6 +8,8 @@ import jp.aegis.client.a2s.SseParser
 import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
+import jp.aegis.client.news.News
+import jp.aegis.client.news.NewsItem
 import jp.aegis.client.places.Places
 import jp.aegis.client.radar.Radar
 import jp.aegis.client.weather.WeatherParse
@@ -375,6 +377,58 @@ fun main() {
         eq("missing note total loss", "", Radar.tileMissingNote("レーダータイル", 9, 0))
         check("missing note partial", Radar.tileMissingNote("レーダータイル", 9, 7).contains("7/9枚"))
         eq("missing note zero expected", "", Radar.tileMissingNote("地図タイル", 0, 0))
+    }
+
+    // ----------------------------------------
+    // 📰 News: RSS 解析・要約整形・選別
+    // ----------------------------------------
+    run {
+        eq("summary strips html", "abc def", News.truncateSummary("<p>abc</p>  def", 80))
+        val truncated = News.truncateSummary("あ".repeat(100), 80)
+        check("summary truncates with ellipsis", truncated.length == 81 && truncated.endsWith("…"))
+        eq("summary null is empty", "", News.truncateSummary(null, 80))
+        eq("pubDate to JST time", "12:04", News.pubDateToTimeText("Sat, 28 Nov 2026 03:04:05 +0000"))
+        eq("pubDate broken is empty", "", News.pubDateToTimeText("not-a-date"))
+        val rss = """<?xml version="1.0" encoding="UTF-8"?>
+        <rss><channel>
+        <item><title>関東で地震 震度4</title><link>https://example.jp/1</link>
+        <description><![CDATA[<p>関東地方で地震がありました。震度4を観測。</p>]]></description>
+        <pubDate>Sat, 28 Nov 2026 03:04:05 +0000</pubDate></item>
+        <item><title>大リーグ 大谷が本塁打</title><link>https://example.jp/2</link>
+        <description>大谷選手が&amp;本塁打を放った</description>
+        <pubDate>Sat, 28 Nov 2026 02:00:00 +0000</pubDate></item>
+        </channel></rss>"""
+        val parsed = News.parseRss(rss)
+        eq("rss item count", 2, parsed.size)
+        eq("rss title", "関東で地震 震度4", parsed[0].title)
+        eq("rss time", "12:04", parsed[0].timeText)
+        eq("rss summary cdata stripped", "関東地方で地震がありました。震度4を観測。", parsed[0].summary)
+        eq("rss entity unescaped", "大谷選手が&本塁打を放った", parsed[1].summary)
+        check("rss disaster detection", News.isDisaster(parsed[0]) && !News.isDisaster(parsed[1]))
+        check("rss broken is empty", News.parseRss("not xml").isEmpty())
+        // 選別: リンク重複の排除と防災優先
+        fun item(title: String, link: String) = NewsItem(title, "", "", link)
+        val sel = News.selectItems(
+            listOf(item("通常ニュース", "https://example.jp/a"), item("地震が発生", "https://example.jp/b")),
+            listOf(item("重複", "https://example.jp/b"), item("リンクなし", ""))
+        )
+        eq("select dedupes and drops empty link", 2, sel.size)
+        eq("select disaster first", "地震が発生", sel[0].title)
+        // 防災 5 件 + 一般 5 件 → 一般は混ざらない (防災>=4 かつ合計>=4 で打ち切り)
+        val many = News.selectItems(
+            (1..5).map { item("地震その$it", "https://example.jp/d$it") },
+            (1..5).map { item("一般その$it", "https://example.jp/g$it") }
+        )
+        eq("select disaster>=4 blocks general fill", 5, many.size)
+        // 防災 2 件 + 一般 10 件 → 合計 8 件まで一般で埋める
+        val filled = News.selectItems(
+            (1..2).map { item("台風その$it", "https://example.jp/d$it") },
+            (1..10).map { item("一般その$it", "https://example.jp/g$it") }
+        )
+        eq("select fills up to 8", 8, filled.size)
+        // 防災 10 件 → 8 件に切り詰める
+        val capped = News.selectItems((1..10).map { item("大雨その$it", "https://example.jp/d$it") }, emptyList())
+        eq("select caps at 8", 8, capped.size)
     }
 
     // ----------------------------------------

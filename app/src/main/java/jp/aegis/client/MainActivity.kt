@@ -27,6 +27,7 @@ import jp.aegis.client.a2s.A2sStreamClient
 import jp.aegis.client.a2s.DisplayText
 import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
+import jp.aegis.client.news.News
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
 import jp.aegis.client.radar.RadarComposer
@@ -98,7 +99,7 @@ class MainActivity : Activity() {
         tabBar.removeAllViews()
         for ((id, label) in listOf(
             "briefing" to "📌 ブリーフィング", "events" to "📋 イベント",
-            "radar" to "🌧️ レーダー", "settings" to "⚙️ 設定"
+            "radar" to "🌧️ レーダー", "news" to "📰 ニュース", "settings" to "⚙️ 設定"
         )) {
             val b = Button(this)
             b.text = label
@@ -113,6 +114,7 @@ class MainActivity : Activity() {
         when (id) {
             "events" -> renderEvents()
             "radar" -> renderRadar()
+            "news" -> renderNews()
             "settings" -> renderSettings()
             else -> renderBriefing()
         }
@@ -354,6 +356,55 @@ class MainActivity : Activity() {
                     if (currentTab != "radar") return@runOnUiThread
                     caption.text = place.name + " 周辺\nレーダーを取得できませんでした: " + (e.message ?: "") +
                         "\n通信状態を確認して、タブを開き直してください。"
+                }
+            }
+        }.start()
+    }
+
+    // ----------------------------------------
+    // 📰 ニュース画面 (NHK RSS)
+    // ----------------------------------------
+
+    private fun renderNews() {
+        content.addView(text("📰 ニュース (NHK)", 18f, true))
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        content.addView(box)
+        box.addView(text("読み込み中…", 13f))
+        // 📡 RSS の取得はワーカースレッドで行う
+        Thread {
+            try {
+                val items = News.fetchItems()
+                runOnUiThread {
+                    if (currentTab != "news") return@runOnUiThread
+                    box.removeAllViews()
+                    for (item in items) {
+                        val cardView = card(
+                            (if (item.timeText.isNotEmpty()) item.timeText + " " else "") + item.title,
+                            item.summary
+                        )
+                        if (item.link.isNotEmpty()) {
+                            cardView.setOnClickListener {
+                                try {
+                                    startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse(item.link)
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    // ブラウザが無い環境では何もしない
+                                }
+                            }
+                        }
+                        box.addView(cardView)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (currentTab != "news") return@runOnUiThread
+                    box.removeAllViews()
+                    box.addView(card("ニュースを取得できませんでした", "通信状態を確認して、タブを開き直してください。"))
                 }
             }
         }.start()
