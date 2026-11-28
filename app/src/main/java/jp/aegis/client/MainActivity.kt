@@ -30,6 +30,7 @@ import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.briefing.Briefing
 import jp.aegis.client.demo.Demo
+import jp.aegis.client.diag.Diagnose
 import jp.aegis.client.news.News
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
@@ -582,21 +583,29 @@ class MainActivity : Activity() {
         }
         content.addView(saveBtn)
         val testBtn = Button(this)
-        testBtn.text = "接続テスト"
+        testBtn.text = "🩺 接続テスト (自己診断)"
+        val diagResults = text("", 13f)
         testBtn.setOnClickListener {
-            status.text = "接続中…"
+            status.text = "接続テスト中… (各データソースへ実際にリクエストしています)"
+            val url = urlInput.text.toString()
+            val token = tokenInput.text.toString()
             Thread {
-                val msg = try {
-                    A2sHttp.checkStatus(urlInput.text.toString(), tokenInput.text.toString())
-                    "✅ A.A.S へ接続できました"
-                } catch (e: Exception) {
-                    "❌ 接続できませんでした (" + e.message + ")"
+                val places = Settings.places(this)
+                val lines = Diagnose.diagnose(
+                    places.firstOrNull() ?: jp.aegis.client.weather.DEFAULT_PLACES[0],
+                    Settings.isServerMode(this), Settings.serverUrl(this), url, token
+                )
+                val okCount = lines.count { it.startsWith("○") }
+                runOnUiThread {
+                    status.text = "接続テスト完了: " + okCount + " / " + lines.size + " 接続OK"
+                    diagResults.text = "🩺 接続テスト結果 (" + okCount + " / " + lines.size + " 接続OK)\n" +
+                        lines.joinToString("\n")
                 }
-                runOnUiThread { status.text = msg }
             }.start()
         }
         content.addView(testBtn)
         content.addView(status)
+        content.addView(diagResults)
 
         // 🌐 取得モード (直接取得 / AEGIS サーバー)
         content.addView(text("🌐 取得モード", 18f, true))
@@ -635,7 +644,7 @@ class MainActivity : Activity() {
                     val body = A2sHttp.fetchOnce(url, "")
                     "✅ 接続OK: " + url + " (応答 " + body.length + " 文字)"
                 } catch (e: Exception) {
-                    "❌ 接続失敗: " + (e.message ?: "通信エラー") + " (サーバー起動とURL・同一Wi-Fiを確認)"
+                    "❌ 接続失敗: " + Diagnose.friendlyError(e) + " (サーバー起動とURL・同一Wi-Fiを確認)"
                 }
                 runOnUiThread { serverStatus.text = msg }
             }.start()

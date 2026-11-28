@@ -11,6 +11,7 @@ import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.a2s.SseParser
 import jp.aegis.client.briefing.Briefing
 import jp.aegis.client.demo.Demo
+import jp.aegis.client.diag.Diagnose
 import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
@@ -606,6 +607,65 @@ fun main() {
         eq("demo events tsunami level", "ok", eSections[1].level)
         check("demo events quake1", eSections[2].body.contains("M5.8"))
         check("demo events quake2 is 42min ago", eSections[3].body.contains(Demo.formatShort(start - 42 * 60000L)))
+    }
+
+    // ----------------------------------------
+    // 🩺 Diagnose: 結果行・エラー文言・対象・実行
+    // ----------------------------------------
+    run {
+        eq("diag line ok", "○ 気象庁 予報：接続OK（123ms）", Diagnose.diagLine("気象庁 予報", true, 123, ""))
+        eq("diag line fail", "× 気象庁 予報：失敗（理由）", Diagnose.diagLine("気象庁 予報", false, 0, "理由"))
+        eq("diag line fail no reason", "× x：失敗（不明なエラー）", Diagnose.diagLine("x", false, 0, null))
+        eq(
+            "friendly timeout", "通信がタイムアウトしました",
+            Diagnose.friendlyError(java.net.SocketTimeoutException("read timed out"))
+        )
+        eq(
+            "friendly http", "サーバーエラー（HTTP 500）",
+            Diagnose.friendlyError(jp.aegis.client.a2s.HttpFetchException(500))
+        )
+        eq(
+            "friendly unknown host", "サーバーに接続できませんでした",
+            Diagnose.friendlyError(java.net.UnknownHostException("example.jp"))
+        )
+        eq(
+            "friendly reset", "通信が切断されました",
+            Diagnose.friendlyError(Exception("connection reset by peer"))
+        )
+        eq("friendly generic", "通信エラーが発生しました", Diagnose.friendlyError(Exception("something")))
+        check(
+            "open-meteo diag url",
+            Diagnose.openMeteoDiagUrl(36.32, 139.0)
+                .contains("models=jma_seamless,ecmwf_ifs025") &&
+                Diagnose.openMeteoDiagUrl(36.32, 139.0).contains("latitude=36.32")
+        )
+        val place = jp.aegis.client.weather.DEFAULT_PLACES[0]
+        val baseTargets = Diagnose.targets(place, false, null)
+        eq("diag targets count", 5, baseTargets.size)
+        eq("diag targets first", "気象庁 予報", baseTargets[0].name)
+        eq("diag targets last", "NHK ニュース RSS", baseTargets[4].name)
+        val serverTargets = Diagnose.targets(place, true, "http://h:8765/")
+        eq("diag targets server added", 6, serverTargets.size)
+        eq("diag targets server url", "http://h:8765/api/briefing", serverTargets[5].url)
+        // 実行 (スタブ取得): 全成功なら 5 行すべて ○、A.A.S 有効時は 6 行目に A.A.S
+        val okLines = Diagnose.diagnose(place, false, null, "", "", fetch = { "{}" }, fetchA2s = { _, _ -> })
+        eq("diagnose all ok count", 5, okLines.size)
+        check("diagnose all ok marks", okLines.all { it.startsWith("○") })
+        val a2sLines = Diagnose.diagnose(
+            place, false, null, "https://a2s.example", "tok",
+            fetch = { "{}" }, fetchA2s = { _, _ -> }
+        )
+        eq("diagnose with a2s count", 6, a2sLines.size)
+        check("diagnose a2s line", a2sLines[5].startsWith("○ A.A.S (Aegis Alert System)"))
+        // 1 ソースだけ失敗させると、その行だけ × になる
+        val failLines = Diagnose.diagnose(
+            place, true, "http://h:8765", "", "",
+            fetch = { url -> if (url.contains("rainviewer")) throw java.net.UnknownHostException("x") else "{}" },
+            fetchA2s = { _, _ -> }
+        )
+        eq("diagnose server mode count", 6, failLines.size)
+        check("diagnose failed line marked", failLines[2].startsWith("× RainViewer レーダー"))
+        check("diagnose server line last", failLines[5].startsWith("○ AEGISサーバー"))
     }
 
     // ----------------------------------------
