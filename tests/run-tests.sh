@@ -36,6 +36,7 @@ trap 'rm -rf "$OUT"' EXIT
   app/src/main/java/jp/aegis/client/a2s/DisplayText.kt \
   app/src/main/java/jp/aegis/client/a2s/NotifyPlanner.kt \
   app/src/main/java/jp/aegis/client/places/Places.kt \
+  app/src/main/java/jp/aegis/client/radar/Radar.kt \
   app/src/main/java/jp/aegis/client/weather/WeatherParse.kt \
   tests/TestMain.kt
 "$JAVA" -cp "$OUT:$STDLIB" jp.aegis.client.TestMainKt

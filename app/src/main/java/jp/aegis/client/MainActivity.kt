@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -28,6 +29,7 @@ import jp.aegis.client.a2s.EventStore
 import jp.aegis.client.a2s.NotifyPlanner
 import jp.aegis.client.places.Places
 import jp.aegis.client.places.Pref
+import jp.aegis.client.radar.RadarComposer
 import jp.aegis.client.weather.Place
 import jp.aegis.client.weather.WeatherParse
 
@@ -94,7 +96,10 @@ class MainActivity : Activity() {
 
     private fun buildTabBar() {
         tabBar.removeAllViews()
-        for ((id, label) in listOf("briefing" to "📌 ブリーフィング", "events" to "📋 イベント", "settings" to "⚙️ 設定")) {
+        for ((id, label) in listOf(
+            "briefing" to "📌 ブリーフィング", "events" to "📋 イベント",
+            "radar" to "🌧️ レーダー", "settings" to "⚙️ 設定"
+        )) {
             val b = Button(this)
             b.text = label
             b.setOnClickListener { showTab(id) }
@@ -107,6 +112,7 @@ class MainActivity : Activity() {
         content.removeAllViews()
         when (id) {
             "events" -> renderEvents()
+            "radar" -> renderRadar()
             "settings" -> renderSettings()
             else -> renderBriefing()
         }
@@ -300,6 +306,57 @@ class MainActivity : Activity() {
             }
             content.addView(b)
         }
+    }
+
+    // ----------------------------------------
+    // 🌧️ レーダー画面
+    // ----------------------------------------
+
+    private var radarPlaceIndex = 0 // レーダーの表示地点の位置
+
+    private fun renderRadar() {
+        val places = Settings.places(this)
+        content.addView(text("🌧️ 雨雲レーダー", 18f, true))
+        // 📍 地点の切り替え
+        val selector = LinearLayout(this)
+        selector.orientation = LinearLayout.HORIZONTAL
+        for ((i, place) in places.withIndex()) {
+            val b = Button(this)
+            b.text = place.name
+            b.setOnClickListener {
+                radarPlaceIndex = i
+                showTab("radar")
+            }
+            selector.addView(b)
+        }
+        content.addView(selector)
+        val place = places.getOrNull(radarPlaceIndex) ?: places.firstOrNull()
+        if (place == null) {
+            content.addView(text("地点が登録されていません。", 14f))
+            return
+        }
+        val caption = text(place.name + " 周辺\n読み込み中…", 13f)
+        content.addView(caption)
+        val image = ImageView(this)
+        image.adjustViewBounds = true
+        content.addView(image)
+        // 📡 合成は通信と画像処理を伴うためワーカースレッドで行う
+        Thread {
+            try {
+                val result = RadarComposer.radarImage(place)
+                runOnUiThread {
+                    if (currentTab != "radar") return@runOnUiThread
+                    image.setImageBitmap(result.bitmap)
+                    caption.text = place.name + " 周辺\n" + result.caption
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (currentTab != "radar") return@runOnUiThread
+                    caption.text = place.name + " 周辺\nレーダーを取得できませんでした: " + (e.message ?: "") +
+                        "\n通信状態を確認して、タブを開き直してください。"
+                }
+            }
+        }.start()
     }
 
     // ----------------------------------------

@@ -9,6 +9,7 @@ import jp.aegis.client.a2s.reconnectBackoffMs
 import jp.aegis.client.a2s.scaleLabel
 import jp.aegis.client.json.MiniJson
 import jp.aegis.client.places.Places
+import jp.aegis.client.radar.Radar
 import jp.aegis.client.weather.WeatherParse
 
 // ========================================
@@ -303,6 +304,77 @@ fun main() {
         eq("forecast area first code", "100010", fAreas[0].code)
         eq("forecast area names dedup", listOf("南部", "北部"), Places.forecastAreaNames(forecastJson))
         eq("forecast areas broken", 0, Places.parseForecastAreas("{}").size)
+    }
+
+    // ----------------------------------------
+    // 🌧️ Radar: タイル計算・フレーム解析・鮮度
+    // ----------------------------------------
+    run {
+        eq("tileX takasaki z8", 226, Radar.tileX(139.0023, 8))
+        eq("tileY takasaki z8", 100, Radar.tileY(36.3219, 8))
+        check("tileX clamp", Radar.tileX(-180.0, 8) == 0 && Radar.tileX(180.0, 8) == 255)
+        // 雨タイル (z7) のカバー範囲: 中心タイルが偶数なら 2×2 枚・オフセット -256/256
+        val rainEven = Radar.rainTilesFor(225, 99)
+        eq("rainTiles even count", 4, rainEven.size)
+        check(
+            "rainTiles even set",
+            rainEven.any { it.contentEquals(intArrayOf(112, 49, -256, -256)) } &&
+                rainEven.any { it.contentEquals(intArrayOf(113, 50, 256, 256)) }
+        )
+        // 中心タイルが奇数ならオフセット 0/512
+        val rainOdd = Radar.rainTilesFor(226, 100)
+        check(
+            "rainTiles odd set",
+            rainOdd.any { it.contentEquals(intArrayOf(113, 50, 0, 0)) } &&
+                rainOdd.any { it.contentEquals(intArrayOf(114, 51, 512, 512)) }
+        )
+        // マーカー位置: 高崎は中心タイル (226,100) の中にある
+        val marker = Radar.markerPixel(36.3219, 139.0023, 8, 225, 99, 256)
+        check("marker inside canvas", marker[0] in 256f..512f && marker[1] in 256f..512f)
+        // 鮮度 (フレーム時刻は 2026/11/26 12:00:00 JST)
+        val frameSec = 1795662000L
+        eq("radar age 10min", 10L, Radar.radarAgeMinutes(frameSec, frameSec * 1000L + 10 * 60_000L))
+        eq("radar age future is 0", 0L, Radar.radarAgeMinutes(frameSec, frameSec * 1000L - 60_000L))
+        eq("freshness fresh", "約5分前の観測", Radar.radarFreshnessText(frameSec, frameSec * 1000L + 5 * 60_000L))
+        eq("freshness at threshold", "約20分前の観測", Radar.radarFreshnessText(frameSec, frameSec * 1000L + 20 * 60_000L))
+        val staleText = Radar.radarFreshnessText(frameSec, frameSec * 1000L + 21 * 60_000L)
+        check("freshness stale note", staleText.startsWith("約21分前の観測") && staleText.contains("古い観測です"))
+        // URL 構築
+        eq(
+            "jma tile url",
+            "https://www.jma.go.jp/bosai/jmatile/data/nowc/20261126120000/none/20261126120000/surf/hrpns/8/226/100.png",
+            Radar.jmaNowcastTileUrl("20261126120000", "20261126120000", 8, 226, 100)
+        )
+        eq(
+            "gsi tile url",
+            "https://cyberjapandata.gsi.go.jp/xyz/std/8/226/100.png",
+            Radar.gsiTileUrl(8, 226, 100)
+        )
+        eq(
+            "rainviewer tile url",
+            "https://tilecache.rainviewer.com/v2/radar/1795662000/256/7/113/50/2/1_1.png",
+            Radar.rainViewerTileUrl("/v2/radar/1795662000", 113, 50)
+        )
+        // フレーム解析
+        val tt = """[{"basetime":"20261126115500","validtime":"20261126120000"},
+                     {"basetime":"20261126115000","validtime":"20261126115500"}]"""
+        val frame = Radar.parseJmaNowcastLatest(tt)!!
+        eq("jma latest basetime", "20261126115500", frame.basetime)
+        eq("jma latest validtime", "20261126120000", frame.validtime)
+        check("jma latest broken", Radar.parseJmaNowcastLatest("{}") == null)
+        eq("jma time14 epoch", 1795662000L, Radar.jmaTime14ToEpochSec("20261126120000"))
+        eq("jma time14 invalid", 0L, Radar.jmaTime14ToEpochSec("x"))
+        val rv = """{"radar":{"past":[{"path":"/v2/radar/1795658400","time":1795658400},
+                                      {"path":"/v2/radar/1795662000","time":1795662000}]}}"""
+        val rain = Radar.parseRainViewerLatest(rv)!!
+        eq("rainviewer latest path", "/v2/radar/1795662000", rain.path)
+        eq("rainviewer latest time", 1795662000L, rain.epochSec)
+        check("rainviewer broken", Radar.parseRainViewerLatest("{}") == null)
+        // タイル欠落の注記
+        eq("missing note complete", "", Radar.tileMissingNote("レーダータイル", 9, 9))
+        eq("missing note total loss", "", Radar.tileMissingNote("レーダータイル", 9, 0))
+        check("missing note partial", Radar.tileMissingNote("レーダータイル", 9, 7).contains("7/9枚"))
+        eq("missing note zero expected", "", Radar.tileMissingNote("地図タイル", 0, 0))
     }
 
     // ----------------------------------------
